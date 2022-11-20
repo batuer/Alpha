@@ -1,14 +1,16 @@
-package com.gusi.alpha;
+package com.android.settings.datausage;
 
 import static android.net.TrafficStats.UID_REMOVED;
 import static android.net.TrafficStats.UID_TETHERING;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AppOpsManager;
-import android.app.usage.NetworkStats;
+import android.app.LoaderManager;
 import android.app.usage.NetworkStatsManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.Loader;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
@@ -16,22 +18,35 @@ import android.net.ConnectivityManager;
 import android.net.INetworkStatsService;
 import android.net.INetworkStatsSession;
 import android.net.NetworkPolicyManager;
+import android.net.NetworkStats;
 import android.net.NetworkTemplate;
 import android.os.Bundle;
+import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.UserHandle;
+import android.os.UserManager;
 import android.provider.Settings;
+import android.telephony.SubscriptionInfo;
+import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.util.SparseArray;
+import android.util.SparseBooleanArray;
 
+import com.android.settings.R;
+import com.android.settingslib.AppItem;
+import com.android.settingslib.net.SummaryForAllUidLoader;
 import com.android.settingslib.net.UidDetailProvider;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
 
 public class DataActivity extends Activity {
-
+// https://github.com/q960757274/PhoneAssistant
     private static final String TAG = "Ylw_Data";
     private AppOpsManager mAppOps;
     private NetworkStatsManager mNetworkStatsManager;
@@ -45,7 +60,7 @@ public class DataActivity extends Activity {
         mNetworkStatsManager = (NetworkStatsManager) getSystemService(Context.NETWORK_STATS_SERVICE);
         mTm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
         hasPermissionToReadNetworkStats();
-        new Thread(() -> test()).start();
+        new Thread(() -> test1()).start();
 
     }
 
@@ -66,43 +81,43 @@ public class DataActivity extends Activity {
         return this;
     }
 
-    private void test() {
-        String subId = mTm.getSubscriberId();
-
-        Log.i(TAG, "test subId=" + subId);
-
-        try {
-            long endTime = System.currentTimeMillis();
-            NetworkStats.Bucket bucket = mNetworkStatsManager.querySummaryForDevice(ConnectivityManager.TYPE_MOBILE,
-                    subId,
-                    0,
-                    endTime);
-            Log.i(TAG, "test: total:" + bucket.getTxBytes() + ":" + bucket.getRxBytes());
-            Log.i(TAG,
-                    "test: total:" + getNetFileSizeDescription(bucket.getTxBytes()) + ":" + getNetFileSizeDescription(bucket.getRxBytes()));
-            NetworkStats.Bucket summaryBucket = new NetworkStats.Bucket();
-            NetworkStats summaryStats = mNetworkStatsManager.querySummary(ConnectivityManager.TYPE_MOBILE, subId, 0,
-                    endTime);
-            long sumTxBytes = 0;
-            long sumRxBytes = 0;
-            do {
-                summaryStats.getNextBucket(summaryBucket);
-                int summaryUid = summaryBucket.getUid();
-                long rxBytes = summaryBucket.getRxBytes();
-                long txBytes = summaryBucket.getTxBytes();
-                sumTxBytes += txBytes;
-                sumRxBytes += rxBytes;
-                Log.i(TAG,
-                        "test: uid=" + summaryUid + ",rxBytes=" + rxBytes + "-" + getNetFileSizeDescription(rxBytes) + ",txBytes=" + txBytes + "-" + getNetFileSizeDescription(txBytes));
-                getPkgNameByUid(summaryUid);
-            } while (summaryStats.hasNextBucket());
-
-            Log.i(TAG, "test: sum:" + sumTxBytes + ":" + getNetFileSizeDescription(sumTxBytes) + ":" + sumRxBytes +
-                    ":" + getNetFileSizeDescription(sumRxBytes));
-        } catch (Exception e) {
-            Log.e(TAG, "test: ", e);
-        }
-    }
+//    private void test() {
+//        String subId = mTm.getSubscriberId();
+//
+//        Log.i(TAG, "test subId=" + subId);
+//
+//        try {
+//            long endTime = System.currentTimeMillis();
+//            NetworkStats.Bucket bucket = mNetworkStatsManager.querySummaryForDevice(ConnectivityManager.TYPE_MOBILE,
+//                    subId,
+//                    0,
+//                    endTime);
+//            Log.i(TAG, "test: total:" + bucket.getTxBytes() + ":" + bucket.getRxBytes());
+//            Log.i(TAG,
+//                    "test: total:" + getNetFileSizeDescription(bucket.getTxBytes()) + ":" + getNetFileSizeDescription(bucket.getRxBytes()));
+//            NetworkStats.Bucket summaryBucket = new NetworkStats.Bucket();
+//            NetworkStats summaryStats = mNetworkStatsManager.querySummary(ConnectivityManager.TYPE_MOBILE, subId, 0,
+//                    endTime);
+//            long sumTxBytes = 0;
+//            long sumRxBytes = 0;
+//            do {
+//                summaryStats.getNextBucket(summaryBucket);
+//                int summaryUid = summaryBucket.getUid();
+//                long rxBytes = summaryBucket.getRxBytes();
+//                long txBytes = summaryBucket.getTxBytes();
+//                sumTxBytes += txBytes;
+//                sumRxBytes += rxBytes;
+//                Log.i(TAG,
+//                        "test: uid=" + summaryUid + ",rxBytes=" + rxBytes + "-" + getNetFileSizeDescription(rxBytes) + ",txBytes=" + txBytes + "-" + getNetFileSizeDescription(txBytes));
+//                getPkgNameByUid(summaryUid);
+//            } while (summaryStats.hasNextBucket());
+//
+//            Log.i(TAG, "test: sum:" + sumTxBytes + ":" + getNetFileSizeDescription(sumTxBytes) + ":" + sumRxBytes +
+//                    ":" + getNetFileSizeDescription(sumRxBytes));
+//        } catch (Exception e) {
+//            Log.e(TAG, "test: ", e);
+//        }
+//    }
 
     /**
      * 根据包名获取uid
@@ -224,9 +239,10 @@ public class DataActivity extends Activity {
 
         NetworkStats.Entry entry = null;
         final int size = stats != null ? stats.size() : 0;
+        Log.i(TAG, "bindStats: " + size);
         for (int i = 0; i < size; i++) {
             entry = stats.getValues(i, entry);
-
+            Log.d(TAG, "bindStats entry: "+ entry);
             // Decide how to collapse items together
             final int uid = entry.uid;
 
@@ -286,7 +302,7 @@ public class DataActivity extends Activity {
 
         Collections.sort(items);
         for (AppItem item : items) {
-            Log.i(TAG, "bindStats AppItem: " + item);
+            Log.i(TAG, "bindStats AppItem: " + item+":-:"+uidString(item.uids));
         }
 
 //        mApps.removeAll();
@@ -305,6 +321,17 @@ public class DataActivity extends Activity {
 //            });
 //            mApps.addPreference(preference);
 //        }
+    }
+
+   private String uidString(SparseBooleanArray uids){
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < uids.size(); i++) {
+            int key = uids.keyAt(i);
+            String pkgNameByUid = getPkgNameByUid(key);
+            sb.append(",userid="+ key);
+            sb.append("pkg="+ pkgNameByUid);
+        }
+        return sb.toString();
     }
 
     /**
